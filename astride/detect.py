@@ -13,7 +13,7 @@ from astropy import units as u
 from astropy.wcs import WCS
 from photutils import Background2D, MedianBackground
 
-from astride.utils.edge import EDGE
+from astride_edited.utils.edge import EDGE
 
 
 class Streak:
@@ -61,10 +61,11 @@ class Streak:
             wcsinfo = hdulist[0].header["CTYPE1"]
             if wcsinfo:
                 self.wcsinfo = True
-                self.filename = filename
+
         except:
             self.wcsinfo = False
 
+        self.filename = filename #moved this from out of the try block on line 64
         hdulist.close()
 
         # Raw image.
@@ -84,7 +85,7 @@ class Streak:
         self._std = None
 
         # Other variables.
-        remove_bkg_options = ('constant', 'map')
+        remove_bkg_options = ('constant', 'map', 'none')
         if remove_bkg not in remove_bkg_options:
             raise RuntimeError('"remove_bkg" must be the one among: %s' %
                                ', '.join(remove_bkg_options))
@@ -118,8 +119,12 @@ class Streak:
             self._remove_background()
         elif self.remove_bkg is 'constant':
             _mean, self._med, self._std = \
-                sigma_clipped_stats(self.raw_image)
+                sigma_clipped_stats(self.raw_image, mask_value = 0)
             self.image = self.raw_image - self._med
+        else:
+            _mean, self._med, self._std = \
+                sigma_clipped_stats(self.raw_image, mask_value = 0)
+            self.image = self.raw_image
 
         # Detect sources. Test purpose only.
         # self._detect_sources()
@@ -131,10 +136,30 @@ class Streak:
         # Get background map and subtract.
         sigma_clip = SigmaClip(sigma=3., maxiters=10)
         bkg_estimator = MedianBackground()
+
+        '''
+        #mask
+        image_data = self.raw_image
+        y_cen = 500
+        x_cen = 700
+        radius = 400
+
+        for y in range(0, len(image_data)):
+            for x in range(0, len(image_data[0])):
+                distance_from_cen = np.sqrt((x-x_cen)**2 + (y-y_cen)**2)
+                if distance_from_cen > radius:
+                    image_data[y,x] = 0
+
+        self.raw_image = image_data
+        '''
+
+        #added to ignore mask
+        mask = (self.raw_image == 0)                      #What I added to !!!!
         self._bkg = Background2D(self.raw_image,
                            (self.bkg_box_size, self.bkg_box_size),
                            filter_size=(3, 3),
-                           sigma_clip=sigma_clip, bkg_estimator=bkg_estimator)
+                           sigma_clip=sigma_clip, bkg_estimator=bkg_estimator,
+                           coverage_mask = mask, fill_value = 0.0)
         self.background_map = self._bkg.background
         self.image = self.raw_image - self.background_map
 
@@ -256,6 +281,8 @@ class Streak:
                     '%d' % (edge['index']), color='y', fontsize=15,
                     weight='bold')
 
+
+        boxes = list() #I added this
         # Plot boxes.
         # Box margin in pixel.
         box_margin = 10
@@ -272,13 +299,17 @@ class Streak:
                 y_max = min(np.max(ys) + box_margin, self.image.shape[1])
                 box_x = [x_min, x_min, x_max, x_max]
                 box_y = [y_min, y_max, y_max, y_min]
+                box = [x_min, x_max, y_min, y_max] #I added this
+                boxes.append(box) #I added this
                 # pl.fill(box_x, box_y, ls='--', fill=False, ec='r', lw=2)
                 edge['box_plotted'] = True
 
         pl.xlabel('X/pixel')
         pl.ylabel('Y/pixel')
         pl.axis([0, self.image.shape[1], 0, self.image.shape[0]])
-        pl.savefig('%sall.png' % self.output_path)
+        dot = self.filename.rindex('.')
+        fslash = self.filename.rindex('\\')
+        pl.savefig('%s%sall.png' % (self.output_path, self.filename[fslash+1:dot])) #modified this so that the name reflects the file name
 
         # Plot all individual edges (connected).
         for n, edge in enumerate(edges):
@@ -297,10 +328,12 @@ class Streak:
                 y_max = min(np.max(ys) + box_margin, self.image.shape[1])
                 edge['box_plotted'] = True
                 pl.axis([x_min, x_max, y_min, y_max])
-                pl.savefig('%s%d.png' % (self.output_path, edge['index']))
+                pl.savefig('%s%s%d.png' % (self.output_path, self.filename[fslash+1:dot], edge['index'])) #also modified this so that name reflects file name
 
         # Clear figure.
         pl.clf()
+
+        return boxes #I added this
 
     def xy2sky(self, filename, x, y, sep=':'):
         """
@@ -381,7 +414,9 @@ class Streak:
         if not os.path.exists(self.output_path):
             os.makedirs(self.output_path)
 
-        fp = open('%sstreaks.txt' % self.output_path, 'w')
+        dot = self.filename.rindex('.')
+        fslash = self.filename.rindex('\\')
+        fp = open('%s%sstreaks.txt' % (self.output_path, self.filename[fslash+1:dot]), 'w')
         if not self.wcsinfo:
             fp.writelines('#ID x_center y_center area perimeter shape_factor ' +
                           'radius_deviation slope_angle intercept ' +
